@@ -1,0 +1,224 @@
+<!-- save as weather.html and open in browser -->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Weather Web</title>
+    <link rel="icon" type="image/png" sizes="36x36" href="favicon.png" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="card" role="region" aria-label="Weather app">
+      <h1>Weather Web</h1>
+      <p>Testing Weather Web</p>
+      <div class="row">
+        <input
+          id="city"
+          type="text"
+          placeholder="Enter city (e.g. New Delhi)"
+          value="New Delhi"
+        />
+        <button id="search">Search</button>
+      </div>
+
+      <div class="info" id="result" aria-live="polite">
+        <div class="small">Enter a city and click Search.</div>
+      </div>
+
+      <div class="hint">
+        Mode: <strong id="modeLabel">Open Weather Map</strong>
+        <div style="font-size: 12px; margin-top: 6px">
+          <!-- You can switch to the no-key mode inside the JS (see comment). -->
+        </div>
+      </div>
+
+      <div id="err" class="error" role="alert"></div>
+      <footer>Built with OpenWeatherMap or Open-Meteo</footer>
+    </div>
+
+    <script>
+      /*
+  HOW IT WORKS:
+  - By default the script tries OpenWeatherMap (city -> weather). Put your API key below.
+  - If you set USE_OPENMETEO = true it will use Open-Meteo (no API key) via its geocoding endpoint.
+  Notes & docs:
+   - OpenWeatherMap current weather: https://api.openweathermap.org/data/2.5/weather?q=City&appid=KEY
+     (needs API key). See OpenWeather docs. :contentReference[oaicite:2]{index=2}
+   - Open-Meteo is free / no-key; use geocoding API to convert city -> lat/lon then call forecast. :contentReference[oaicite:3]{index=3}
+*/
+
+      // CONFIG:
+      const USE_OPENMETEO = true; // set true to use Open-Meteo (no API key)
+      const OPENWEATHER_API_KEY = "YOUR_OPENWEATHER_API_KEY"; // << replace with your key
+
+      // DOM:
+      const cityInput = document.getElementById("city");
+      const searchBtn = document.getElementById("search");
+      const result = document.getElementById("result");
+      const err = document.getElementById("err");
+      const modeLabel = document.getElementById("modeLabel");
+
+      modeLabel.textContent = USE_OPENMETEO
+        ? "Open-Meteo (no API key)"
+        : "OpenWeatherMap (API key)";
+
+      searchBtn.addEventListener("click", () =>
+        fetchWeather(cityInput.value.trim())
+      );
+      cityInput.addEventListener("keyup", (e) => {
+        if (e.key === "Enter") fetchWeather(cityInput.value.trim());
+      });
+
+      async function fetchWeather(city) {
+        err.textContent = "";
+        if (!city) {
+          err.textContent = "Please enter a city name.";
+          return;
+        }
+        searchBtn.disabled = true;
+        result.innerHTML = `<div class="small">Loading weather for <strong>${escapeHtml(
+          city
+        )}</strong>…</div>`;
+
+        try {
+          if (USE_OPENMETEO) {
+            // 1) geocode -> lat/lon
+            const g = await fetch(
+              `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
+                city
+              )}&count=1`
+            );
+            if (!g.ok) throw new Error("Geocoding failed");
+            const gjson = await g.json();
+            if (!gjson.results || gjson.results.length === 0)
+              throw new Error("Location not found");
+            const place = gjson.results[0];
+            const { latitude, longitude, name, country, timezone } = place;
+
+            // 2) get current weather (Open-Meteo hourly temperature; choose latest hour)
+            // We'll request hourly temperature and wind speed and set timezone=auto
+            const weatherResp = await fetch(
+              `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&hourly=temperature_2m,weathercode,windspeed_10m&current_weather=true&timezone=auto`
+            );
+            if (!weatherResp.ok) throw new Error("Weather fetch failed");
+            const w = await weatherResp.json();
+
+            // Open-Meteo returns current_weather object with temperature & windspeed
+            const cw = w.current_weather || {};
+            showResult({
+              place: `${name}, ${country}`,
+              tempC:
+                cw.temperature ??
+                (w.hourly && w.hourly.temperature_2m
+                  ? w.hourly.temperature_2m[0]
+                  : "N/A"),
+              wind:
+                cw.windspeed ??
+                (w.hourly && w.hourly.windspeed_10m
+                  ? w.hourly.windspeed_10m[0]
+                  : "N/A"),
+              desc: mapWeatherCode(cw.weathercode),
+            });
+          } else {
+            // OpenWeatherMap by city name (needs API KEY)
+            if (
+              !OPENWEATHER_API_KEY ||
+              OPENWEATHER_API_KEY === "YOUR_OPENWEATHER_API_KEY"
+            ) {
+              throw new Error(
+                "No OpenWeather API key set — either put your key in the script or switch to Open-Meteo mode."
+              );
+            }
+            // Example endpoint: https://api.openweathermap.org/data/2.5/weather?q=London&appid={API key}
+            const resp = await fetch(
+              `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(
+                city
+              )}&appid=${OPENWEATHER_API_KEY}&units=metric`
+            );
+            if (!resp.ok) {
+              if (resp.status === 401)
+                throw new Error("Invalid API key for OpenWeatherMap.");
+              if (resp.status === 404) throw new Error("City not found.");
+              throw new Error(
+                "Weather fetch failed (status " + resp.status + ")"
+              );
+            }
+            const data = await resp.json();
+            const place = `${data.name}${
+              data.sys && data.sys.country ? ", " + data.sys.country : ""
+            }`;
+            const tempC = data.main && data.main.temp;
+            const wind = data.wind && data.wind.speed;
+            const desc =
+              (data.weather &&
+                data.weather[0] &&
+                data.weather[0].description) ||
+              "";
+            const icon =
+              data.weather && data.weather[0] && data.weather[0].icon;
+            showResult({ place, tempC, wind, desc, icon });
+          }
+        } catch (e) {
+          err.textContent = e.message || "Something went wrong";
+          result.innerHTML = `<div class="small">No data to display.</div>`;
+        } finally {
+          searchBtn.disabled = false;
+        }
+      }
+
+      function showResult({ place, tempC, wind, desc, icon }) {
+        const iconHtml = icon
+          ? `<img src="https://openweathermap.org/img/wn/${icon}@2x.png" alt="">`
+          : "";
+        result.innerHTML = `
+    <div class="small">${escapeHtml(place)}</div>
+    <div class="big">${
+      tempC !== undefined ? Math.round(tempC) + "°C" : "N/A"
+    } ${iconHtml}</div>
+    <div class="small" style="text-transform:capitalize">${escapeHtml(
+      desc || "—"
+    )}</div>
+    <div class="meta">
+      <div>Wind: ${wind !== undefined ? wind + " m/s" : "—"}</div>
+      <div>Updated: ${new Date().toLocaleString()}</div>
+    </div>
+  `;
+      }
+
+      // small helper to map Open-Meteo weathercode to human text (basic)
+      function mapWeatherCode(code) {
+        if (code === undefined || code === null) return "";
+        const map = {
+          0: "Clear sky",
+          1: "Mainly clear",
+          2: "Partly cloudy",
+          3: "Overcast",
+          45: "Fog",
+          48: "Depositing rime fog",
+          51: "Light drizzle",
+          61: "Slight rain",
+          63: "Moderate rain",
+          71: "Slight snow",
+          80: "Rain showers",
+          95: "Thunderstorm",
+        };
+        return map[code] || "Condition code " + code;
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            }[c])
+        );
+      }
+    </script>
+  </body>
+</html>
