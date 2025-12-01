@@ -1,5 +1,4 @@
- <style>
-      :root {
+        :root {
         font-family: system-ui, -apple-system, Segoe UI, Roboto,
           "Helvetica Neue", Arial;
       }
@@ -83,4 +82,3 @@
         text-align: center;
         margin-top: 10px;
       }
-    </style>
