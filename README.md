@@ -1,2 +1,2 @@
 # Weather-Website
-this is a free open API weather Website 
+this is a free open API weather Web-page
